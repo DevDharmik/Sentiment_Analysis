@@ -5,6 +5,7 @@ Uses NLTK movie_reviews corpus (Pang & Lee polarity v2.0 — the exact dataset
 cited in the 2023 paper). Trains LinearSVC, LogisticRegression, MultinomialNB
 with TF-IDF features. 70/30 stratified split, seed=42.
 
+
 Run from repo root:
     python -m src.train_classical
 """
