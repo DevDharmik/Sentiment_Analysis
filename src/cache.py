@@ -1,5 +1,6 @@
 """
 src/cache.py — SQLite cache for analysed YouTube videos.
+
 """
 
 from __future__ import annotations
