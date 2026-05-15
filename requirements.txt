@@ -1,0 +1,26 @@
+# Core
+streamlit>=1.36
+plotly>=5.22
+pandas>=2.2
+numpy>=1.26
+
+# YouTube data
+google-api-python-client>=2.130
+tenacity>=8.3
+
+# Preprocessing
+demoji>=1.1
+langdetect>=1.0.9
+
+# Classical ML
+scikit-learn>=1.4
+nltk>=3.8
+joblib>=1.4
+
+# Transformer
+transformers>=4.40
+torch>=2.2
+sentencepiece>=0.2
+
+# Dev
+pytest>=8.0
