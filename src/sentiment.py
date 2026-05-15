@@ -2,6 +2,7 @@
 src/sentiment.py — Transformer sentiment classifier with uncertainty flag.
 """
 
+
 from __future__ import annotations
 
 from dataclasses import dataclass
