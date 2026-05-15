@@ -1,6 +1,7 @@
 """
 src/explain.py — Token-level attribution for linear classical models.
 
+
 For a linear classifier (LinearSVC, LogisticRegression), each prediction
 can be decomposed exactly into per-token contributions:
     contribution(token) = tfidf_value(token) × coefficient(token)
