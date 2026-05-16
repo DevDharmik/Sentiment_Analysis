@@ -1,7 +1,8 @@
 """
 YouTube Comment Sentiment Analysis Dashboard
-Self-contained app — uses YouTube Data API v3 + HuggingFace RoBERTa.
-Optionally compares against the SVM model from models/svm_tfidf.joblib.
+Uses YouTube Data API v3 + HuggingFace RoBERTa as the main classifier.
+Compares against the 3 classical models from src/train_classical.py
+(SVM, Logistic Regression, Naive Bayes — all sharing one TF-IDF vectorizer).
 """
 import os
 from urllib.parse import urlparse, parse_qs
@@ -32,12 +33,20 @@ st.set_page_config(page_title="YouTube Sentiment Analysis", page_icon="🎬", la
 
 API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 ROBERTA_MODEL = "cardiffnlp/twitter-roberta-base-sentiment-latest"
-SVM_PATH = "models/svm_tfidf.joblib"
+
+MODELS_DIR = "models"
+VECTORIZER_PATH = os.path.join(MODELS_DIR, "vectorizer.joblib")
+CLASSICAL_MODELS = {
+    "SVM":        os.path.join(MODELS_DIR, "svm_tfidf.joblib"),
+    "LogReg":     os.path.join(MODELS_DIR, "logreg_tfidf.joblib"),
+    "NaiveBayes": os.path.join(MODELS_DIR, "nb_tfidf.joblib"),
+}
 
 ROBERTA_LABEL_MAP = {
     "label_0": "negative", "label_1": "neutral", "label_2": "positive",
     "negative": "negative", "neutral": "neutral", "positive": "positive",
 }
+CLASSICAL_LABEL_MAP = {"pos": "positive", "neg": "negative"}
 COLOR_MAP = {"positive": "#10b981", "neutral": "#94a3b8", "negative": "#ef4444"}
 
 
@@ -64,13 +73,27 @@ def get_roberta_pipeline():
 
 
 @st.cache_resource(show_spinner=False)
-def get_svm_model():
-    if not HAS_JOBLIB or not os.path.exists(SVM_PATH):
+def get_vectorizer():
+    if not HAS_JOBLIB or not os.path.exists(VECTORIZER_PATH):
         return None
     try:
-        return joblib.load(SVM_PATH)
+        return joblib.load(VECTORIZER_PATH)
     except Exception:
         return None
+
+
+@st.cache_resource(show_spinner=False)
+def get_classical_models():
+    if not HAS_JOBLIB:
+        return {}
+    loaded = {}
+    for name, path in CLASSICAL_MODELS.items():
+        if os.path.exists(path):
+            try:
+                loaded[name] = joblib.load(path)
+            except Exception:
+                pass
+    return loaded
 
 
 def fetch_video_meta(youtube, video_id):
@@ -123,11 +146,13 @@ def score_roberta(texts, pipe):
     return [ROBERTA_LABEL_MAP.get(r["label"].lower(), r["label"].lower()) for r in results]
 
 
-def score_svm(texts, model):
-    if not model or not texts:
+def score_classical(texts, model, vectorizer):
+    """Transform texts with shared TF-IDF vectorizer, then predict."""
+    if not model or vectorizer is None or not texts:
         return []
-    preds = model.predict(texts)
-    return [str(p).lower() for p in preds]
+    X = vectorizer.transform(texts)
+    preds = model.predict(X)
+    return [CLASSICAL_LABEL_MAP.get(str(p).lower(), str(p).lower()) for p in preds]
 
 
 # ---------- UI ----------
@@ -135,7 +160,7 @@ st.title("🎬 YouTube Comment Sentiment Analysis")
 st.caption("Paste any YouTube URL → get sentiment breakdown in seconds.")
 
 if not API_KEY:
-    st.error("`YOUTUBE_API_KEY` env var is not set. Add it as a Codespaces secret and rebuild the container.")
+    st.error("`YOUTUBE_API_KEY` env var is not set. Add it to your shell or as a Codespaces secret.")
     st.stop()
 
 c1, c2 = st.columns([3, 1])
@@ -160,7 +185,6 @@ if go and url:
         st.error("Video not found or private.")
         st.stop()
 
-    # Video header
     h1, h2 = st.columns([1, 2])
     with h1:
         st.image(meta["thumbnail"], use_container_width=True)
@@ -172,7 +196,6 @@ if go and url:
         m2.metric("Likes", f"{meta['likes']:,}")
         m3.metric("Comments", f"{meta['comments']:,}")
 
-    # Fetch
     with st.spinner(f"Fetching up to {max_comments} comments..."):
         comments = fetch_comments(youtube, video_id, max_comments)
     if not comments:
@@ -180,7 +203,6 @@ if go and url:
         st.stop()
     st.success(f"Fetched {len(comments)} comments.")
 
-    # Score with RoBERTa
     with st.spinner("Loading RoBERTa (first run downloads ~500 MB)..."):
         pipe = get_roberta_pipeline()
     if not pipe:
@@ -195,17 +217,20 @@ if go and url:
     df["sentiment"] = roberta_labels
     df["published"] = pd.to_datetime(df["published"], errors="coerce")
 
-    # Optional SVM scoring
-    svm_model = get_svm_model()
-    if svm_model is not None:
-        try:
-            df["svm_sentiment"] = score_svm(texts, svm_model)
-        except Exception as e:
-            st.info(f"SVM model loaded but scoring failed: {e}")
+    vectorizer = get_vectorizer()
+    classical = get_classical_models()
+    classical_results = {}
+    if vectorizer is not None and classical:
+        with st.spinner(f"Scoring with {len(classical)} classical models..."):
+            for name, model in classical.items():
+                try:
+                    classical_results[name] = score_classical(texts, model, vectorizer)
+                    df[f"sentiment_{name}"] = classical_results[name]
+                except Exception as e:
+                    st.warning(f"{name} scoring failed: {e}")
 
-    # ---------- Metrics ----------
     st.divider()
-    st.subheader("📊 Sentiment Breakdown")
+    st.subheader("📊 Sentiment Breakdown (RoBERTa)")
 
     counts = df["sentiment"].value_counts()
     total = counts.sum()
@@ -228,7 +253,6 @@ if go and url:
     k4.metric("Engagement-weighted score", f"{engagement_score:+.3f}",
               help="−1 to +1, weighted by log(1+likes)")
 
-    # ---------- Charts ----------
     g1, g2 = st.columns(2)
     with g1:
         fig = px.pie(names=counts.index, values=counts.values, hole=0.5,
@@ -237,20 +261,35 @@ if go and url:
         st.plotly_chart(fig, use_container_width=True)
 
     with g2:
-        if "svm_sentiment" in df.columns:
-            comp = pd.DataFrame({
-                "RoBERTa": df["sentiment"].value_counts(),
-                "SVM":     df["svm_sentiment"].value_counts(),
-            }).fillna(0).reset_index().rename(columns={"index": "sentiment"})
-            comp = comp.melt(id_vars="sentiment", var_name="model", value_name="count")
-            fig = px.bar(comp, x="sentiment", y="count", color="model",
-                         barmode="group", title="Model comparison: RoBERTa vs SVM")
+        if classical_results:
+            all_models = {"RoBERTa": df["sentiment"].tolist()}
+            for name, preds in classical_results.items():
+                all_models[name] = preds
+            comp_rows = []
+            for model_name, labels in all_models.items():
+                vc = pd.Series(labels).value_counts()
+                for sentiment in ["positive", "neutral", "negative"]:
+                    comp_rows.append({
+                        "model": model_name,
+                        "sentiment": sentiment,
+                        "count": int(vc.get(sentiment, 0)),
+                    })
+            comp = pd.DataFrame(comp_rows)
+            fig = px.bar(comp, x="model", y="count", color="sentiment",
+                         color_discrete_map=COLOR_MAP, barmode="stack",
+                         title=f"Model comparison ({len(all_models)} models)")
             st.plotly_chart(fig, use_container_width=True)
+            st.caption("Classical models (SVM/LogReg/NB) are binary (pos/neg) — they cannot "
+                       "produce a neutral label. RoBERTa is the 3-class production model.")
         else:
-            st.info("SVM model not found at `models/svm_tfidf.joblib`. "
-                    "Run `python -m src.train_classical` to enable the comparison view.")
+            missing = []
+            if vectorizer is None:
+                missing.append("`models/vectorizer.joblib`")
+            if not classical:
+                missing.append("classical model files")
+            st.info(f"Model comparison unavailable: missing {', '.join(missing)}. "
+                    "Run `python -m src.train_classical` from the repo root.")
 
-    # Sentiment over time
     st.divider()
     st.subheader("📈 Sentiment Over Time")
     df_time = df.dropna(subset=["published"]).copy()
@@ -263,7 +302,6 @@ if go and url:
     else:
         st.info("No timestamps available for time-series view.")
 
-    # Top comments
     st.divider()
     st.subheader("💬 Top Comments")
     t1, t2 = st.columns(2)
@@ -280,7 +318,6 @@ if go and url:
             st.caption(row["text"][:400])
             st.divider()
 
-    # Download
     st.divider()
     csv = df.drop(columns=["score", "weight"], errors="ignore").to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Download results as CSV", csv,
