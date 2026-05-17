@@ -8,6 +8,10 @@ import os
 from urllib.parse import urlparse, parse_qs
 
 import streamlit as st
+import os
+# Bridge Streamlit Cloud secrets → env vars (so the rest of the code works unchanged)
+if hasattr(st, "secrets") and "YOUTUBE_API_KEY" in st.secrets:
+    os.environ["YOUTUBE_API_KEY"] = st.secrets["AIzaSyBWK53sduwkSKqUmEFK9QMkkxFMYyEgnK0"]
 import pandas as pd
 import numpy as np
 import plotly.express as px
