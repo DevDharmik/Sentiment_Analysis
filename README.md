@@ -3,21 +3,28 @@
 [![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.36+-FF4B4B.svg)](https://streamlit.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Live Demo](https://img.shields.io/badge/demo-live-brightgreen.svg)](STREAMLIT_URL_HERE)
 
 Compare classical ML and modern transformer models for sentiment analysis on real YouTube comments. Fetches comments live via the YouTube Data API, runs four models in parallel, and visualises the results in an interactive Streamlit dashboard.
 
 This project is a methodologically honest rebuild and extension of an undergraduate paper that reported 91% accuracy for Linear SVM + TF-IDF on YouTube comments. Here the classical baseline is reconstructed transparently (with seed and hyperparameters documented), then directly compared against a modern transformer to show where each approach actually holds up.
 
-🚧 **Live demo:** Coming soon on Streamlit Cloud.
+🟢 **Live demo:** [Try it here](https://sentimentanalysis-ds3uztzrdi2bzn9hbfdqrd.streamlit.app/)
+
+> Paste any YouTube video URL → see how 4 sentiment models (3 classical + 1 transformer) score the same comments side-by-side.
 
 ---
 
 ## Stack
 
 - **Data:** YouTube Data API v3
-- **Models:** scikit-learn (LinearSVC, LogisticRegression, MultinomialNB) with TF-IDF; HuggingFace `cardiffnlp/twitter-roberta-base-sentiment-latest`
+- **Classical models:** scikit-learn (LinearSVC, LogisticRegression, MultinomialNB) with TF-IDF
+- **Transformer:** HuggingFace `cardiffnlp/twitter-roberta-base-sentiment-latest` (trained on 124M tweets)
 - **Dashboard:** Streamlit + Plotly
+- **Storage:** SQLite cache for video metadata and predictions
 - **Development:** GitHub Codespaces, Google Colab
+
+---
 
 ## Features
 
@@ -99,7 +106,7 @@ This downloads the Pang & Lee `movie_reviews` corpus from NLTK and trains Linear
 streamlit run streamlit_app.py
 ```
 
-Open [http://localhost:8501](http://localhost:8501), paste any YouTube URL, and analyse.
+Open <http://localhost:8501>, paste any YouTube URL, and analyse.
 
 ---
 
@@ -111,11 +118,11 @@ Click **Code → Codespaces → Create codespace on main**. The devcontainer ins
 streamlit run streamlit_app.py
 ```
 
-The port 8501 is auto-forwarded.
+Port 8501 is auto-forwarded.
 
 ## Running in Google Colab
 
-Open `notebooks/01_pipeline_exploration.ipynb`, add `YOUTUBE_API_KEY` (and optionally `GITHUB_PAT`) to Colab Secrets via the 🔑 icon, and run cells top to bottom.
+Open `notebooks/01_pipeline_exploration.ipynb`, add `YOUTUBE_API_KEY` to Colab Secrets via the 🔑 icon, and run cells top to bottom.
 
 ---
 
@@ -144,6 +151,15 @@ Open `notebooks/01_pipeline_exploration.ipynb`, add `YOUTUBE_API_KEY` (and optio
 ```bash
 pytest tests/
 ```
+
+---
+
+## Roadmap
+
+- [ ] Multi-language transformer (current model is English-only)
+- [ ] Sarcasm detection layer (open problem on YouTube comments)
+- [ ] User-uploaded labelled CSV → live evaluation against the 4 models
+- [ ] Comment thread reply-graph sentiment cascade
 
 ---
 
