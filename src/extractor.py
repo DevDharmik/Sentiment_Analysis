@@ -4,31 +4,48 @@ src/extractor.py — YouTube Data API v3 wrapper.
 Fetches video metadata, channel metadata, and comments.
 """
 
-
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 
-_VIDEO_ID_PATTERNS = [
-    r"(?:v=|/)([0-9A-Za-z_-]{11}).*",
-    r"^([0-9A-Za-z_-]{11})$",
-]
+_VIDEO_ID_PATTERN = re.compile(r"^[0-9A-Za-z_-]{11}$")
+_YOUTUBE_HOSTS = {
+    "m.youtube.com",
+    "music.youtube.com",
+    "www.youtube.com",
+    "youtube.com",
+}
+_SHORT_HOSTS = {"www.youtu.be", "youtu.be"}
 
 
 def parse_video_id(url_or_id: str) -> Optional[str]:
-    url_or_id = url_or_id.strip()
-    for pattern in _VIDEO_ID_PATTERNS:
-        m = re.search(pattern, url_or_id)
-        if m:
-            return m.group(1)
-    return None
+    value = url_or_id.strip()
+    if _VIDEO_ID_PATTERN.fullmatch(value):
+        return value
+
+    parsed = urlparse(value if "://" in value else f"https://{value}")
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    candidate: Optional[str] = None
+
+    if hostname in _SHORT_HOSTS:
+        candidate = parsed.path.strip("/").split("/", 1)[0]
+    elif hostname in _YOUTUBE_HOSTS:
+        if parsed.path.rstrip("/") == "/watch":
+            candidate = parse_qs(parsed.query).get("v", [None])[0]
+        else:
+            segments = parsed.path.strip("/").split("/")
+            if len(segments) == 2 and segments[0] in {"embed", "live", "shorts"}:
+                candidate = segments[1]
+
+    return candidate if candidate and _VIDEO_ID_PATTERN.fullmatch(candidate) else None
 
 
 @dataclass
@@ -111,11 +128,7 @@ def fetch_video_meta(client, video_id: str) -> VideoMeta:
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
 def fetch_channel_info(client, channel_id: str) -> ChannelInfo:
-    resp = (
-        client.channels()
-        .list(part="snippet,statistics", id=channel_id)
-        .execute()
-    )
+    resp = client.channels().list(part="snippet,statistics", id=channel_id).execute()
     if not resp.get("items"):
         raise VideoNotFoundError(f"Channel {channel_id} not found")
     item = resp["items"][0]
@@ -166,14 +179,16 @@ def fetch_comments(client, video_id: str, max_total: int = 500) -> list:
             raise
         for item in resp.get("items", []):
             top = item["snippet"]["topLevelComment"]["snippet"]
-            rows.append(Comment(
-                comment_id=item["snippet"]["topLevelComment"]["id"],
-                author=top.get("authorDisplayName", "Anonymous"),
-                text=top.get("textDisplay", ""),
-                like_count=int(top.get("likeCount", 0)),
-                reply_count=int(item["snippet"].get("totalReplyCount", 0)),
-                published_at=top.get("publishedAt", ""),
-            ))
+            rows.append(
+                Comment(
+                    comment_id=item["snippet"]["topLevelComment"]["id"],
+                    author=top.get("authorDisplayName", "Anonymous"),
+                    text=top.get("textDisplay", ""),
+                    like_count=int(top.get("likeCount", 0)),
+                    reply_count=int(item["snippet"].get("totalReplyCount", 0)),
+                    published_at=top.get("publishedAt", ""),
+                )
+            )
         page_token = resp.get("nextPageToken")
         if not page_token:
             break
