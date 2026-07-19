@@ -5,10 +5,9 @@ Compares against the 3 classical models from src/train_classical.py
 (SVM, Logistic Regression, Naive Bayes — all sharing one TF-IDF vectorizer).
 """
 import os
-from urllib.parse import urlparse, parse_qs
+from pathlib import Path
 
 import streamlit as st
-import os
 # Bridge Streamlit Cloud secrets → env vars
 if hasattr(st, "secrets") and "YOUTUBE_API_KEY" in st.secrets:
     os.environ["YOUTUBE_API_KEY"] = st.secrets["YOUTUBE_API_KEY"]
@@ -18,6 +17,8 @@ import plotly.express as px
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from src.extractor import parse_video_id
+from xquik_export import ExportFormatError, load_xquik_rows
 
 try:
     from transformers import pipeline
@@ -35,15 +36,16 @@ except ImportError:
 # ---------- Config ----------
 st.set_page_config(page_title="YouTube Sentiment Analysis", page_icon="🎬", layout="wide")
 
+BASE_DIR = Path(__file__).resolve().parent
 API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 ROBERTA_MODEL = "cardiffnlp/twitter-roberta-base-sentiment-latest"
 
-MODELS_DIR = "models"
-VECTORIZER_PATH = os.path.join(MODELS_DIR, "vectorizer.joblib")
+MODELS_DIR = BASE_DIR / "models"
+VECTORIZER_PATH = MODELS_DIR / "vectorizer.joblib"
 CLASSICAL_MODELS = {
-    "SVM":        os.path.join(MODELS_DIR, "svm_tfidf.joblib"),
-    "LogReg":     os.path.join(MODELS_DIR, "logreg_tfidf.joblib"),
-    "NaiveBayes": os.path.join(MODELS_DIR, "nb_tfidf.joblib"),
+    "SVM":        MODELS_DIR / "svm_tfidf.joblib",
+    "LogReg":     MODELS_DIR / "logreg_tfidf.joblib",
+    "NaiveBayes": MODELS_DIR / "nb_tfidf.joblib",
 }
 
 ROBERTA_LABEL_MAP = {
@@ -55,15 +57,6 @@ COLOR_MAP = {"positive": "#10b981", "neutral": "#94a3b8", "negative": "#ef4444"}
 
 
 # ---------- Helpers ----------
-def extract_video_id(url: str):
-    parsed = urlparse(url.strip())
-    if parsed.hostname == "youtu.be":
-        return parsed.path.lstrip("/")
-    if parsed.hostname and "youtube.com" in parsed.hostname:
-        return parse_qs(parsed.query).get("v", [None])[0]
-    return None
-
-
 @st.cache_resource(show_spinner=False)
 def get_youtube_client():
     return build("youtube", "v3", developerKey=API_KEY)
@@ -163,6 +156,62 @@ def score_classical(texts, model, vectorizer):
 st.title("🎬 YouTube Comment Sentiment Analysis")
 st.caption("Paste any YouTube URL → get sentiment breakdown in seconds.")
 
+with st.expander("Analyze a Xquik export"):
+    st.caption(
+        "Import an export from "
+        "[Xquik x-twitter-scraper](https://github.com/Xquik-dev/x-twitter-scraper). "
+        'Xquik is an independent third-party service. Not affiliated with X Corp. '
+        '"Twitter" and "X" are trademarks of X Corp.'
+    )
+    xquik_export = st.file_uploader(
+        "Upload JSON, JSONL, or CSV with comment or tweet text",
+        type=["json", "jsonl", "csv"],
+    )
+
+if xquik_export is not None:
+    try:
+        rows = load_xquik_rows(xquik_export.getvalue())
+    except ExportFormatError as error:
+        st.error(str(error))
+        st.stop()
+    if not rows:
+        st.warning("No text rows found in the uploaded export.")
+        st.stop()
+
+    texts = [str(row["text"]) for row in rows]
+    with st.spinner("Loading RoBERTa for export scoring..."):
+        pipe = get_roberta_pipeline()
+    if not pipe:
+        st.error("Could not load RoBERTa.")
+        st.stop()
+
+    with st.spinner(f"Scoring {len(texts)} export rows..."):
+        labels = score_roberta(texts, pipe)
+
+    df = pd.DataFrame(rows)
+    df["sentiment"] = labels
+    df["published"] = pd.to_datetime(df["published"], errors="coerce")
+    st.subheader("📊 Xquik Export Sentiment Breakdown")
+    counts = df["sentiment"].value_counts()
+    fig = px.pie(
+        names=counts.index,
+        values=counts.values,
+        hole=0.5,
+        color=counts.index,
+        color_discrete_map=COLOR_MAP,
+        title="Sentiment distribution",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.dataframe(df, use_container_width=True)
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "⬇️ Download export results as CSV",
+        csv,
+        file_name="xquik_export_sentiment.csv",
+        mime="text/csv",
+    )
+    st.stop()
+
 if not API_KEY:
     st.error("`YOUTUBE_API_KEY` env var is not set. Add it to your shell or as a Codespaces secret.")
     st.stop()
@@ -176,7 +225,7 @@ with c2:
 go = st.button("Analyse", type="primary", use_container_width=True)
 
 if go and url:
-    video_id = extract_video_id(url)
+    video_id = parse_video_id(url)
     if not video_id:
         st.error("Could not parse video ID from URL.")
         st.stop()
